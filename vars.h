@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 VARSAPI vars_file vars_load(const char* file_path);
-VARSAPI int vars_hot_reload(vars_file* file);
+VARSAPI int vars_hot_load(vars_file* file);
 VARSAPI char* vars_get_string(char* key, vars_file file, char* buffer);
 VARSAPI float vars_get_float(char* key, vars_file file);
 VARSAPI int vars_get_int(char* key, vars_file file);
@@ -252,7 +252,7 @@ static char* vars__find_key_value(const char* key, vars_file file) {
     return NULL;
 }
 
-VARSAPI int vars_hot_reload(vars_file* file) {
+VARSAPI int vars_hot_load(vars_file* file) {
     if (!file || !file->file_path) {
         return 0; // No file to reload
     }
@@ -273,7 +273,7 @@ VARSAPI int vars_hot_reload(vars_file* file) {
     size_t path_len = strlen(file->file_path);
     new_file.file_path = (char*)malloc(path_len + 1);
     if (!new_file.file_path) {
-        fprintf(stderr, "ERROR: vars_hot_reload: Memory allocation failed.\n");
+        fprintf(stderr, "ERROR: vars_hot_load: Memory allocation failed.\n");
         vars_free(new_file);
         return 0;
     }
