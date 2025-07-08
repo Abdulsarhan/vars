@@ -38,7 +38,8 @@ extern "C" {
 #endif
 
 VARSAPI vars_file vars_load(const char* file_path);
-VARSAPI int vars_hot_reload(vars_file* file);
+VARSAPI int vars_hot_load(vars_file* file);
+
 VARSAPI char* vars_get_string(char* key, vars_file* file, char* buffer);
 VARSAPI float vars_get_float(char* key, vars_file* file);
 VARSAPI int vars_get_int(char* key, vars_file* file);
@@ -46,18 +47,29 @@ VARSAPI int vars_get_bool(char* key, vars_file* file);
 VARSAPI vars_vec2 vars_get_vec2(char* key, vars_file* file);
 VARSAPI vars_vec3 vars_get_vec3(char* key, vars_file* file);
 VARSAPI vars_vec4 vars_get_vec4(char* key, vars_file* file);
+
+VARSAPI int vars_set_string(char* key, const char* value, vars_file* file);
+VARSAPI int vars_set_float(char* key, float value, vars_file* file);
+VARSAPI int vars_set_int(char* key, int value, vars_file* file);
+VARSAPI int vars_set_bool(char* key, int value, vars_file* file);
+VARSAPI int vars_set_vec2(char* key, vars_vec2 value, vars_file* file);
+VARSAPI int vars_set_vec3(char* key, vars_vec3 value, vars_file* file);
+VARSAPI int vars_set_vec4(char* key, vars_vec4 value, vars_file* file);
+
+VARSAPI int vars_save(vars_file* file);
+
 VARSAPI int vars_free(vars_file file);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // vars_h
+#endif // VARS_H
 
 #ifdef VARS_IMPLEMENTATION
 
 #ifdef _WIN32
-// disables deprecation of stdup on MSVC.
+// disables deprecation of strdup on MSVC.
 #pragma warning(disable : 4996)
 #endif
 
@@ -270,10 +282,10 @@ static vars_file vars__load_and_parse_file(const char* file_path) {
 }
 
 // ---------------------------------------------
-// PARSER + GET FUNCTIONS
+// HELPER FUNCTIONS
 // ---------------------------------------------
 
-static const char* find_key_value(const char* key, vars_file* file) {
+static const char* find_key_value(char* key, vars_file* file) {
     if (!file->map) return NULL;
     return vars_map_get(file->map, key);
 }
@@ -292,7 +304,242 @@ static int parse_vec(const char* val, float* out, int count) {
     return *val == ')';
 }
 
-VARSAPI int vars_hot_reload(vars_file* file) {
+// ---------------------------------------------
+// SAVE FUNCTIONS
+// ---------------------------------------------
+
+typedef struct {
+    char* section;
+    char* key;
+    char* value;
+} vars_entry;
+
+typedef struct {
+    vars_entry* entries;
+    size_t count;
+    size_t capacity;
+} vars_entry_list;
+
+static void vars_entry_list_init(vars_entry_list* list) {
+    list->entries = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+static void vars_entry_list_add(vars_entry_list* list, const char* section, const char* key, const char* value) {
+    if (list->count >= list->capacity) {
+        list->capacity = list->capacity ? list->capacity * 2 : 16;
+        list->entries = (vars_entry*)realloc(list->entries, list->capacity * sizeof(vars_entry));
+    }
+    
+    vars_entry* entry = &list->entries[list->count++];
+    entry->section = section ? strdup(section) : NULL;
+    entry->key = strdup(key);
+    entry->value = strdup(value);
+}
+
+static void vars_entry_list_free(vars_entry_list* list) {
+    for (size_t i = 0; i < list->count; i++) {
+        free(list->entries[i].section);
+        free(list->entries[i].key);
+        free(list->entries[i].value);
+    }
+    free(list->entries);
+    list->entries = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+static int vars_entry_compare(const void* a, const void* b) {
+    const vars_entry* ea = (const vars_entry*)a;
+    const vars_entry* eb = (const vars_entry*)b;
+    
+    // Sort by section first (NULL sections come first)
+    if (!ea->section && !eb->section) return strcmp(ea->key, eb->key);
+    if (!ea->section) return -1;
+    if (!eb->section) return 1;
+    
+    int section_cmp = strcmp(ea->section, eb->section);
+    if (section_cmp != 0) return section_cmp;
+    
+    return strcmp(ea->key, eb->key);
+}
+
+static int vars__set_value(char* key, const char* value, vars_file* file) {
+    if (!file || !file->map) return 0;
+    
+    // Check if key already exists in hashmap
+    const char* existing = vars_map_get(file->map, key);
+    if (existing) {
+        // Key exists, update the value in the hashmap
+        // We need to update the parsed_buf entry that corresponds to this key
+        
+        // Find the entry in the hashmap and replace it
+        uint32_t hash = hash_fnv1a(key);
+        size_t idx = hash % file->map->capacity;
+        
+        for (size_t i = 0; i < file->map->capacity; i++) {
+            size_t probe = (idx + i) % file->map->capacity;
+            if (file->map->entries[probe].key && strcmp(file->map->entries[probe].key, key) == 0) {
+                // Found the entry, update the value
+                file->map->entries[probe].value = strdup(value);
+                return 1;
+            }
+        }
+    } else {
+        // Key doesn't exist, add it
+        vars_map_insert(file->map, strdup(key), strdup(value));
+    }
+    
+    return 1;
+}
+
+VARSAPI int vars_set_string(char* key, const char* value, vars_file* file) {
+    if (!key || !value || !file) return 0;
+    
+    // Format as quoted string
+    size_t len = strlen(value);
+    char* quoted_value = (char*)malloc(len + 3); // +2 for quotes, +1 for null terminator
+    if (!quoted_value) return 0;
+    
+    quoted_value[0] = '"';
+    strcpy(quoted_value + 1, value);
+    quoted_value[len + 1] = '"';
+    quoted_value[len + 2] = '\0';
+    
+    int result = vars__set_value(key, quoted_value, file);
+    free(quoted_value);
+    return result;
+}
+
+VARSAPI int vars_set_float(char* key, float value, vars_file* file) {
+    if (!key || !file) return 0;
+    
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%.6f", value);
+    return vars__set_value(key, buffer, file);
+}
+
+VARSAPI int vars_set_int(char* key, int value, vars_file* file) {
+    if (!key || !file) return 0;
+    
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%d", value);
+    return vars__set_value(key, buffer, file);
+}
+
+VARSAPI int vars_set_bool(char* key, int value, vars_file* file) {
+    if (!key || !file) return 0;
+    
+    return vars__set_value(key, value ? "true" : "false", file);
+}
+
+VARSAPI int vars_set_vec2(char* key, vars_vec2 value, vars_file* file) {
+    if (!key || !file) return 0;
+    
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "(%.6f %.6f)", value.x, value.y);
+    return vars__set_value(key, buffer, file);
+}
+
+VARSAPI int vars_set_vec3(char* key, vars_vec3 value, vars_file* file) {
+    if (!key || !file) return 0;
+    
+    char buffer[96];
+    snprintf(buffer, sizeof(buffer), "(%.6f %.6f %.6f)", value.x, value.y, value.z);
+    return vars__set_value(key, buffer, file);
+}
+
+VARSAPI int vars_set_vec4(char* key, vars_vec4 value, vars_file* file) {
+    if (!key || !file) return 0;
+    
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "(%.6f %.6f %.6f %.6f)", value.x, value.y, value.z, value.w);
+    return vars__set_value(key, buffer, file);
+}
+
+VARSAPI int vars_save(vars_file* file) {
+    if (!file || !file->file_path || !file->map) return 0;
+    
+    // Create a list of all entries sorted by section and key
+    vars_entry_list list;
+    vars_entry_list_init(&list);
+    
+    // Extract all entries from the hashmap
+    for (size_t i = 0; i < file->map->capacity; i++) {
+        if (file->map->entries[i].key) {
+            const char* full_key = file->map->entries[i].key;
+            const char* value = file->map->entries[i].value;
+            
+            // Split the key into section and key parts
+            const char* slash = strchr(full_key, '/');
+            if (slash) {
+                // Has section
+                size_t section_len = slash - full_key;
+                char* section = (char*)malloc(section_len + 1);
+                strncpy(section, full_key, section_len);
+                section[section_len] = '\0';
+                
+                vars_entry_list_add(&list, section, slash + 1, value);
+                free(section);
+            } else {
+                // No section (global)
+                vars_entry_list_add(&list, NULL, full_key, value);
+            }
+        }
+    }
+    
+    // Sort entries by section and key
+    qsort(list.entries, list.count, sizeof(vars_entry), vars_entry_compare);
+    
+    // Write to file
+    FILE* fp = fopen(file->file_path, "w");
+    if (!fp) {
+        vars_entry_list_free(&list);
+        return 0;
+    }
+    
+    const char* current_section = NULL;
+    int wrote_section_header = 0;
+    
+    for (size_t i = 0; i < list.count; i++) {
+        vars_entry* entry = &list.entries[i];
+        
+        // Check if we need to make a subfolder
+        if (entry->section) {
+            if (!current_section || strcmp(current_section, entry->section) != 0) {
+                if (i > 0) fprintf(fp, "\n"); // Add blank line before new subfolder
+                fprintf(fp, ":/%s\n", entry->section);
+                current_section = entry->section;
+                wrote_section_header = 1;
+            }
+        } else {
+            // Global section
+            if (current_section) {
+                if (i > 0) fprintf(fp, "\n"); // Add blank line before global section
+                current_section = NULL;
+                wrote_section_header = 0;
+            }
+        }
+        
+        // Write key-value pair
+        fprintf(fp, "%s %s\n", entry->key, entry->value);
+    }
+    
+    fclose(fp);
+    vars_entry_list_free(&list);
+    
+    // Update the file's modification time
+    file->last_modified = vars__get_file_mod_time(file->file_path);
+    
+    return 1;
+}
+
+// ---------------------------------------------
+// PARSER + GET FUNCTIONS
+// ---------------------------------------------
+
+VARSAPI int vars_hot_load(vars_file* file) {
     if (!file || !file->file_path) {
         return 0; // No file to reload
     }
@@ -313,7 +560,7 @@ VARSAPI int vars_hot_reload(vars_file* file) {
     size_t path_len = strlen(file->file_path);
     new_file.file_path = (char*)malloc(path_len + 1);
     if (!new_file.file_path) {
-        fprintf(stderr, "ERROR: vars_hot_reload: Memory allocation failed.\n");
+        fprintf(stderr, "ERROR: vars_hot_load: Memory allocation failed.\n");
         vars_free(new_file);
         return 0;
     }
