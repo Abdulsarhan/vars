@@ -1,11 +1,17 @@
 # vars
 
 A simple key-value pair file format, with support for comments.
+
 There are two implementations: one that uses a hashmap, and one that doesn't.
 The difference is that the hashmap implementation uses a bit more memory and takes a little longer
 to load the files initially since it has to cache everything.
 But it's a LOT faster than the no-hashmap implementation
 when fetching a value from a file.
+You can also save things to a file of this format.
+Just call the vars_set_\*() function for whichever values you want, 
+and then call the vars_save() function.
+The vars_set_\*() functions cache your changes while the vars_save()
+function actually writes it out to disk.
 ## Format
 
 ```
