@@ -3,7 +3,7 @@
 A simple key-value pair file format that also supports comments.
 I made this format so that you can have a simple file that you can use to store variables.
 
-## File Syntax
+## Format
 
 ```
 # A valid key can contain: letters, hyphens and underscores. Other kinds of characters are not permitted to be used in keys.
@@ -11,10 +11,9 @@ I made this format so that you can have a simple file that you can use to store 
 # The function that gets a bool returns an int for the purpose of returning -1 on failure.
 # The key-value pairs must be separated by at least one space. strings and vectors work without a space, but that's more of a bug than a feature.
 
-## Format
 # This is a comment.
 
-name "john doe" # string
+name "joe mama" # string
 
 is_fullscreen true # bool
 
@@ -26,6 +25,7 @@ pos (1.123 1.5) # vec2
 
 size (1.5 1.5 1.5) # vec3
 
+:/game # Yes, we even support subfolders!
 rotation (1.5 1.5 1.5 1.5) # vec4
 ```
 
@@ -58,7 +58,7 @@ int main(void) {
     vars_vec3 size = vars_get_vec3("size", &vars);
     printf("size (vars_vec3): %f, %f, %f\n", size.x, size.y, size.z);
 
-    vars_vec4 rotation = vars_get_vec4("rotation", &vars);
+    vars_vec4 rotation = vars_get_vec4("game/rotation", &vars); // this variable is under the "game" subfolder in the file.
     printf("rotation (vars_vec4): %f, %f, %f, %f\n", rotation.x, rotation.y, rotation.z, rotation.w);
 
     vars_free(vars);
